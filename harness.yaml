@@ -8,6 +8,7 @@ environment:
   python: "3.13"
 
 services:
+
   postgres:
     type: docker
     image: postgres:15
@@ -17,6 +18,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: dam
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   minio:
     type: docker
@@ -36,21 +42,146 @@ services:
       - "6379:6379"
 
 setup:
+
   - name: install backend dependencies
     run: |
       cd backend
       pip install -r requirements.txt
 
+  - name: install worker dependencies
+    run: |
+      cd worker
+      pip install -r requirements.txt
+
+  - name: create MinIO bucket
+    run: |
+      pip install boto3
+      python <<EOF
+      import boto3
+      s3 = boto3.client(
+          "s3",
+          endpoint_url="http://127.0.0.1:9000",
+          aws_access_key_id="minio",
+          aws_secret_access_key="minio123"
+      )
+      try:
+          s3.create_bucket(Bucket="media")
+      except:
+          pass
+      EOF
+
 tests:
 
-  - name: backend imports successfully
+  # ------------------------------------------------
+  # Test 1: Backend imports successfully
+  # ------------------------------------------------
+
+  - name: backend imports cleanly
     run: |
       cd backend
       python -c "import main"
 
-  - name: backend health endpoint responds
+  # ------------------------------------------------
+  # Test 2: Backend starts successfully
+  # ------------------------------------------------
+
+  - name: backend starts
     run: |
       cd backend
       uvicorn main:app --host 127.0.0.1 --port 8000 &
       sleep 5
+
+  # ------------------------------------------------
+  # Test 3: Health endpoint works
+  # ------------------------------------------------
+
+  - name: health endpoint returns OK
+    run: |
       curl -f http://127.0.0.1:8000/health
+
+  # ------------------------------------------------
+  # Test 4: Asset creation works
+  # ------------------------------------------------
+
+  - name: create asset
+    run: |
+      pip install requests
+      python <<EOF
+      import requests
+      r = requests.post("http://127.0.0.1:8000/assets")
+      assert r.status_code == 200
+      asset_id = r.json()["asset_id"]
+      print("Asset created:", asset_id)
+      EOF
+
+  # ------------------------------------------------
+  # Test 5: Upload file to asset
+  # ------------------------------------------------
+
+  - name: upload asset file
+    run: |
+      pip install requests
+      python <<EOF
+      import requests, tempfile
+
+      # create test file
+      f = tempfile.NamedTemporaryFile(delete=False)
+      f.write(b"test content")
+      f.close()
+
+      # create asset
+      r = requests.post("http://127.0.0.1:8000/assets")
+      asset_id = r.json()["asset_id"]
+
+      # upload file
+      files = {"file": open(f.name, "rb")}
+      r = requests.post(
+          f"http://127.0.0.1:8000/assets/{asset_id}/upload",
+          files=files
+      )
+
+      assert r.status_code == 200
+      print("Upload successful")
+      EOF
+
+  # ------------------------------------------------
+  # Test 6: Verify MinIO storage
+  # ------------------------------------------------
+
+  - name: verify object exists in MinIO
+    run: |
+      python <<EOF
+      import boto3
+
+      s3 = boto3.client(
+          "s3",
+          endpoint_url="http://127.0.0.1:9000",
+          aws_access_key_id="minio",
+          aws_secret_access_key="minio123"
+      )
+
+      response = s3.list_objects_v2(Bucket="media")
+
+      assert "Contents" in response
+      assert len(response["Contents"]) > 0
+
+      print("MinIO storage verified")
+      EOF
+
+  # ------------------------------------------------
+  # Test 7: Verify asset retrieval
+  # ------------------------------------------------
+
+  - name: retrieve asset metadata
+    run: |
+      python <<EOF
+      import requests
+
+      r = requests.post("http://127.0.0.1:8000/assets")
+      asset_id = r.json()["asset_id"]
+
+      r = requests.get(f"http://127.0.0.1:8000/assets/{asset_id}")
+
+      assert r.status_code == 200
+      print("Asset retrieval verified")
+      EOF
