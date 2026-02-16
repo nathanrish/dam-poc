@@ -56,3 +56,10 @@ async def upload_asset(asset_id: uuid.UUID, file: UploadFile = File(...), db: Se
     db.refresh(db_asset)
     
     return {"status": "success", "storage_path": object_name}
+
+@app.get("/assets/{asset_id}")
+def get_asset(asset_id: uuid.UUID, db: Session = Depends(get_db)):
+    db_asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
+    if not db_asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return db_asset
