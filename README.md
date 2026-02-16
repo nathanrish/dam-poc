@@ -1,437 +1,385 @@
-
-# DAM POC — Digital Asset Management Platform
+# DAM POC — Digital Asset Management System
 
 ## Overview
 
-This project is a Proof-of-Concept (POC) Digital Asset Management (DAM) system designed to validate a scalable, production-ready architecture using open source components.
+This project is a Proof of Concept (POC) for a scalable Digital Asset Management (DAM) system designed to manage digital media assets including images, audio, and video.
 
-The system provides:
+The system separates metadata from binary storage, enabling scalable ingest pipelines, media processing, and delivery workflows.
 
-- Asset creation and metadata management
-- File upload and storage using S3-compatible object storage (MinIO)
-- Metadata persistence using PostgreSQL
-- Retrieval of asset metadata and storage location
-- Worker pipeline readiness for future media processing
-
-This POC establishes the architectural foundation for a future enterprise media platform supporting images, audio, and video assets.
+This architecture follows patterns used in enterprise media platforms and is designed to evolve into a production-grade system.
 
 ---
 
-## Objectives
+# Architecture Overview
 
-The primary goal of this POC is to validate the complete asset ingestion lifecycle:
-
-```
-
-Client → Backend → Metadata Database → Object Storage → Retrieval
+## High-Level Architecture
 
 ```
-
-Specifically, this POC validates:
-
-- Backend service connectivity to PostgreSQL
-- Object storage integration using MinIO
-- Asset metadata creation and persistence
-- File upload and storage in object storage
-- Consistent linkage between metadata and storage
-
-Future phases will extend this to include media processing, streaming, and search.
+                ┌──────────────┐
+                │    Client     │
+                │ (UI / API)    │
+                └──────┬───────┘
+                       │
+                       ▼
+               ┌──────────────┐
+               │ FastAPI      │
+               │ Backend API  │
+               └──────┬───────┘
+                      │
+      ┌───────────────┼────────────────┐
+      ▼               ▼                ▼
+┌────────────┐  ┌────────────┐  ┌────────────┐
+│ PostgreSQL │  │   MinIO    │  │   Redis    │
+│ Metadata   │  │ Object     │  │ Queue      │
+│ Storage    │  │ Storage    │  │ System     │
+└────────────┘  └────────────┘  └──────┬─────┘
+                                        │
+                                        ▼
+                                   ┌──────────┐
+                                   │ Worker   │
+                                   │ Processor│
+                                   └──────────┘
+```
 
 ---
 
-## Architecture
+## Component Responsibilities
 
-High-level system architecture:
+### FastAPI Backend
 
-```
+Responsible for:
 
-```
-             ┌─────────────┐
-             │  Frontend   │
-             │ (Upload UI) │
-             └──────┬──────┘
-                    │
-             ┌──────▼──────┐
-             │   FastAPI   │
-             │   Backend   │
-             └──────┬──────┘
-                    │
-    ┌───────────────┼───────────────┐
-    │               │               │
-```
+* Asset metadata creation
+* Upload coordination
+* Asset retrieval
+* Storage orchestration
 
-┌──────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐  
-│ PostgreSQL │ │ MinIO │ │ Redis │  
-│ Metadata │ │ Object Store│ │ Queue │  
-└─────────────┘ └─────────────┘ └─────────────┘
-
-```
-
-Component roles:
-
-| Component | Purpose |
-|--------|---------|
-| FastAPI | Control plane, API and metadata management |
-| PostgreSQL | Persistent metadata storage |
-| MinIO | S3-compatible object storage |
-| Redis | Queue for future media processing |
-| Worker | Future media processing pipeline |
-| Frontend | Upload and playback interface (POC) |
+Stateless service.
 
 ---
 
-## Repository Structure
+### PostgreSQL
+
+Stores structured metadata:
 
 ```
+asset_id
+filename
+storage_path
+created_at
+```
 
+Source of truth for asset identity.
+
+---
+
+### MinIO Object Storage
+
+Stores binary media files.
+
+S3-compatible interface.
+
+Can be replaced with:
+
+* AWS S3
+* Dell Isilon
+* Azure Blob Storage
+* Google Cloud Storage
+
+---
+
+### Redis
+
+Acts as message broker for background processing.
+
+Enables asynchronous workflows.
+
+---
+
+### Worker
+
+Handles background tasks such as:
+
+* Transcoding
+* Thumbnail generation
+* Media analysis
+
+Currently scaffolded for future expansion.
+
+---
+
+# Asset Ingest Sequence Diagram
+
+This shows how assets are created and uploaded.
+
+```
+Client                Backend              PostgreSQL             MinIO
+  │                     │                      │                    │
+  │ POST /assets       │                      │                    │
+  │───────────────────▶│                      │                    │
+  │                     │ INSERT metadata     │                    │
+  │                     │────────────────────▶│                    │
+  │                     │ COMMIT              │                    │
+  │                     │◀────────────────────│                    │
+  │ UUID returned      │                      │                    │
+  │◀───────────────────│                      │                    │
+  │                     │                      │                    │
+  │ POST /assets/{id}/upload                 │                    │
+  │───────────────────▶│                      │                    │
+  │                     │ Verify asset exists │                    │
+  │                     │────────────────────▶│                    │
+  │                     │ OK                  │                    │
+  │                     │◀────────────────────│                    │
+  │                     │ Upload file        │───────────────────▶│
+  │                     │                    │                    │
+  │ Success returned   │                    │                    │
+  │◀───────────────────│                    │                    │
+```
+
+---
+
+# Asset Retrieval Sequence
+
+```
+Client             Backend              PostgreSQL
+  │                  │                      │
+  │ GET /assets/{id}│                      │
+  │────────────────▶│                      │
+  │                  │ Query metadata      │
+  │                  │────────────────────▶│
+  │                  │ Return metadata     │
+  │                  │◀────────────────────│
+  │ Return result    │                      │
+  │◀────────────────│                      │
+```
+
+---
+
+# Future Processing Pipeline Sequence
+
+```
+Upload complete
+     │
+     ▼
+ Backend
+     │
+     ▼
+ Redis Queue
+     │
+     ▼
+ Worker
+     │
+     ├── Transcode video
+     ├── Generate thumbnails
+     ├── Extract metadata
+     └── Update database
+```
+
+---
+
+# Repository Structure
+
+```
 dam-poc/
-
-backend/  
-main.py  
-db.py  
-models.py  
-storage.py  
-requirements.txt
-
-worker/  
-worker.py  
-transcoder.py  
-requirements.txt
-
-frontend/  
-index.html
-
-storage/  
-(MinIO runtime storage — not tracked in git)
-
-docker-compose.yml  
-harness.yaml  
-README.md  
-.gitignore
-
+│
+├── backend/
+│   ├── main.py
+│   ├── models.py
+│   ├── db.py
+│   ├── storage.py
+│   └── requirements.txt
+│
+├── worker/
+│   ├── worker.py
+│   ├── transcoder.py
+│   └── requirements.txt
+│
+├── frontend/
+│   └── index.html
+│
+├── docker-compose.yml
+├── harness.yaml
+├── README.md
+└── .gitignore
 ```
 
 ---
 
-## Prerequisites
+# Local Development Setup
 
-Required software:
-
-- Docker
-- Python 3.13+
-- Git
-
-Optional tools:
-
-- curl
-- Postman
-
----
-
-## Setup Instructions
-
-### 1. Clone repository
+## Start infrastructure
 
 ```
-
-git clone  
-cd dam-poc
-
-```
-
----
-
-### 2. Start infrastructure services
-
-```
-
 docker compose up -d
-
 ```
 
-This starts:
+Starts:
 
-- PostgreSQL → localhost:5432
-- MinIO → localhost:9000
-- MinIO Console → http://localhost:9001
-- Redis → localhost:6379
+* PostgreSQL
+* MinIO
+* Redis
 
 ---
 
-### 3. Create MinIO bucket
-
-Open:
+## Start backend
 
 ```
-
-[http://localhost:9001](http://localhost:9001/)
-
-```
-
-Login:
-
-```
-
-Username: minio  
-Password: minio123
-
-```
-
-Create bucket:
-
-```
-
-media
-
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 ---
 
-### 4. Start backend service
+## Access API documentation
 
 ```
-
-cd backend  
-pip install -r requirements.txt  
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-```
-
-Verify backend is running:
-
-```
-
-[http://localhost:8000/health](http://localhost:8000/health)
-
-```
-
-Expected response:
-
-```
-
-{"status":"ok"}
-
+http://127.0.0.1:8000/docs
 ```
 
 ---
 
-## API Usage
-
-Interactive API documentation:
+## Access MinIO console
 
 ```
+http://localhost:9001
+```
 
-[http://localhost:8000/docs](http://localhost:8000/docs)
+Credentials:
 
+```
+minio
+minio123
 ```
 
 ---
 
-### Create Asset
+# Testing Workflow
+
+## Create asset
 
 ```
-
 POST /assets
-
 ```
 
-Response:
-
-```
-
-{  
-"asset_id": "UUID"  
-}
-
-```
+Returns UUID.
 
 ---
 
-### Upload Asset File
+## Upload file
 
 ```
-
 POST /assets/{asset_id}/upload
-
 ```
 
-Uploads file to MinIO and updates metadata.
+Stores binary file.
 
 ---
 
-### Retrieve Asset Metadata
+## Retrieve asset
 
 ```
-
 GET /assets/{asset_id}
-
 ```
 
-Returns asset metadata and storage path.
+Returns metadata.
 
 ---
 
-## Storage Model
+# Storage Model
 
-Object storage structure:
+Metadata stored in PostgreSQL.
 
-```
+Binary stored in MinIO.
 
-media/  
-asset-id/  
-original.file
+Relationship:
 
 ```
-
-Metadata stored separately in PostgreSQL.
-
-This separation allows:
-
-- Independent scaling of storage and metadata
-- Storage backend abstraction
-- Future migration to cloud storage
-
----
-
-## Development and Validation
-
-This project includes automated validation using Harness.
-
-Harness executes integration tests to verify:
-
-- Backend startup
-- Database connectivity
-- Asset creation
-- File upload
-- Object storage integration
-- Metadata retrieval
-
-Harness configuration:
-
-```
-
-harness.yaml
-
-```
-
-Harness ensures system integrity during development and prevents regressions.
-
-Harness is a development and validation tool and is not required for runtime operation.
-
----
-
-## Autonomous Development (Antigravity)
-
-Antigravity is used as an autonomous development agent during implementation.
-
-Antigravity operates in conjunction with Harness:
-
-```
-
-Harness detects failures  
-↓  
-Antigravity applies fixes  
-↓  
-Harness re-validates system
-
-```
-
-This enables rapid development convergence and automated correction of integration issues.
-
-Antigravity is a development tool and is not required for production deployment.
-
----
-
-## Development Workflow
-
-Recommended workflow:
-
-```
-
-Modify code  
-Commit changes  
-Run Harness validation  
-Allow Antigravity to resolve failures if present  
-Verify system stability
-
+PostgreSQL record → references → MinIO object
 ```
 
 ---
 
-## Future Enhancements
+# Design Principles
 
-Planned features:
+## Metadata-first ingest
 
-- Video transcoding using FFmpeg
-- Streaming support (HLS / DASH)
-- Video playback integration
-- Search indexing (OpenSearch)
-- Authentication and authorization
-- Cloud storage integration (AWS S3)
-- Kubernetes deployment
-- Media processing pipeline
+Asset identity created before upload.
+
+Enables reliable workflows.
 
 ---
 
-## Production Migration Path
+## Stateless services
 
-POC components map directly to production infrastructure:
+Backend stores no local files.
 
-| POC | Production |
-|---|---|
-MinIO | AWS S3 |
-Postgres container | Managed database (RDS, Cloud SQL) |
-Redis container | Managed Redis |
-Docker Compose | Kubernetes |
-Local worker | Distributed worker cluster |
-
-No architectural redesign required.
+All state in storage systems.
 
 ---
 
-## Architectural Principles
+## Storage abstraction
 
-This system is designed using the following principles:
-
-- Storage abstraction
-- Metadata-driven asset management
-- Separation of control plane and data plane
-- Immutable asset storage model
-- Event-driven processing readiness
-- Horizontal scalability readiness
+S3-compatible interface enables portability.
 
 ---
 
-## Current Status
+## Horizontal scalability
 
-Current phase:
-
-```
-
-POC — Asset ingestion and storage validation
-
-```
-
-Next phase:
-
-```
-
-Media processing and streaming support
-
-```
+Backend and workers scale independently.
 
 ---
 
-## Summary
+# Harness Validation
 
-This POC validates the foundational architecture for a scalable Digital Asset Management system capable of evolving into a full enterprise media platform.
+Harness validates:
 
-The system successfully demonstrates:
+* Service startup
+* Health endpoint
+* Asset creation
+* Upload
+* Retrieval
 
-- Asset metadata management
-- Object storage integration
-- Storage abstraction
-- Future-ready architecture for media processing and streaming
-```
+Ensures system correctness.
 
 ---
+
+# Future Enhancements
+
+Planned:
+
+* Video transcoding pipeline
+* HLS/DASH streaming
+* Open-source media player integration
+* Metadata search indexing
+* Authentication and authorization
+* Cloud deployment
+* AI tagging
+
+---
+
+# System Properties
+
+This system is:
+
+* Stateless
+* Horizontally scalable
+* Storage-independent
+* Extensible
+* Cloud-portable
+
+---
+
+# Startup Summary
+
+Start system:
+
+```
+docker compose up -d
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+System becomes operational.
+
+---
+
