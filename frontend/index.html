@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DAM POC Upload</title>
+    <!-- Shaka Player CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.3.5/shaka-player.compiled.js"></script>
+</head>
+
+<body>
+    <h1>Upload Asset</h1>
+    <input type="file" id="fileInput">
+    <button onclick="uploadAsset()">Upload</button>
+    <div id="status"></div>
+
+    <h2>Play Asset</h2>
+    <input type="text" id="assetIdInput" placeholder="Enter Asset ID">
+    <button onclick="playAsset()">Play</button>
+    <br><br>
+    <video id="videoPlayer" width="640" controls autoplay></video>
+
+    <script>
+        async function uploadAsset() {
+            const fileInput = document.getElementById('fileInput');
+            const statusDiv = document.getElementById('status');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                statusDiv.innerText = "Please select a file.";
+                return;
+            }
+
+            statusDiv.innerText = "Creating asset...";
+
+            try {
+                // 1. Create Asset to get ID
+                const createResponse = await fetch('http://localhost:8000/assets', {
+                    method: 'POST'
+                });
+
+                if (!createResponse.ok) {
+                    throw new Error(`Failed to create asset: ${createResponse.statusText}`);
+                }
+
+                const createData = await createResponse.json();
+                const assetId = createData.asset_id;
+
+                statusDiv.innerText = `Asset created (${assetId}). Uploading file...`;
+                document.getElementById('assetIdInput').value = assetId;
+
+                // 2. Upload File to the Asset ID
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const uploadResponse = await fetch(`http://localhost:8000/assets/${assetId}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
+                }
+
+                const uploadData = await uploadResponse.json();
+                statusDiv.innerText = `Upload successful! Path: ${uploadData.storage_path}`;
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.innerText = `Error: ${error.message}`;
+            }
+        }
+
+        function initApp() {
+            shaka.polyfill.installAll();
+            if (shaka.Player.isBrowserSupported()) {
+                console.log('Shaka Player is supported.');
+            } else {
+                console.error('Browser not supported!');
+            }
+        }
+
+        async function playAsset() {
+            const assetId = document.getElementById('assetIdInput').value;
+            if (!assetId) {
+                alert("Please enter an Asset ID");
+                return;
+            }
+
+            const video = document.getElementById('videoPlayer');
+            const player = new shaka.Player(video);
+
+            // Assuming standard HLS output path pattern
+            const manifestUri = `http://localhost:9000/media/${assetId}/playlist.m3u8`;
+
+            player.addEventListener('error', (event) => {
+                console.error('Error code', event.detail.code, 'object', event.detail);
+            });
+
+            try {
+                await player.load(manifestUri);
+                console.log('The video has now been loaded!');
+            } catch (e) {
+                console.error('Error code', e.code, 'object', e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+
+</html>
