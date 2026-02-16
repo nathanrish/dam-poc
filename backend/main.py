@@ -5,6 +5,7 @@ import models
 from db import engine, SessionLocal
 import storage
 import uuid
+from task_queue import enqueue_asset_processing
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -54,6 +55,8 @@ async def upload_asset(asset_id: uuid.UUID, file: UploadFile = File(...), db: Se
     
     db.commit()
     db.refresh(db_asset)
+    
+    enqueue_asset_processing(asset_id)
     
     return {"status": "success", "storage_path": object_name}
 
