@@ -1,0 +1,56 @@
+version: 1
+
+project:
+  name: dam-poc
+  language: python
+
+environment:
+  python: "3.13"
+
+services:
+  postgres:
+    type: docker
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dam
+
+  minio:
+    type: docker
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    env:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+
+  redis:
+    type: docker
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+setup:
+  - name: install backend dependencies
+    run: |
+      cd backend
+      pip install -r requirements.txt
+
+tests:
+
+  - name: backend imports successfully
+    run: |
+      cd backend
+      python -c "import main"
+
+  - name: backend health endpoint responds
+    run: |
+      cd backend
+      uvicorn main:app --host 127.0.0.1 --port 8000 &
+      sleep 5
+      curl -f http://127.0.0.1:8000/health
