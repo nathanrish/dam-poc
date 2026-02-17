@@ -1,187 +1,153 @@
-version: 1
+version: "1.0"
 
-project:
-  name: dam-poc
-  language: python
+# Constraints file to enforce architecture rules
+constraints_file: CONSTRAINTS.md
 
-environment:
-  python: "3.13"
 
 services:
 
   postgres:
-    type: docker
     image: postgres:15
-    ports:
-      - "5432:5432"
-    env:
+    environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: dam
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 5
 
-  minio:
-    type: docker
-    image: minio/minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    command: server /data --console-address ":9001"
-    env:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
 
   redis:
-    type: docker
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-setup:
 
-  - name: install backend dependencies
-    run: |
-      cd backend
-      pip install -r requirements.txt
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  - name: install worker dependencies
-    run: |
-      cd worker
-      pip install -r requirements.txt
-
-  - name: create MinIO bucket
-    run: |
-      pip install boto3
-      python <<EOF
-      import boto3
-      s3 = boto3.client(
-          "s3",
-          endpoint_url="http://127.0.0.1:9000",
-          aws_access_key_id="minio",
-          aws_secret_access_key="minio123"
-      )
-      try:
-          s3.create_bucket(Bucket="media")
-      except:
-          pass
-      EOF
 
 tests:
 
-  # ------------------------------------------------
-  # Test 1: Backend imports successfully
-  # ------------------------------------------------
+  #
+  # HEALTH TEST
+  #
+  - name: Health endpoint must respond
+    request:
+      method: GET
+      url: http://localhost:8000/health
+    expect:
+      status: 200
 
-  - name: backend imports cleanly
-    run: |
-      cd backend
-      python -c "import main"
 
-  # ------------------------------------------------
-  # Test 2: Backend starts successfully
-  # ------------------------------------------------
+  #
+  # ASSET CREATION TEST
+  #
+  - name: Create asset
+    request:
+      method: POST
+      url: http://localhost:8000/assets
+    save:
+      json:
+        asset_id: asset_id
+    expect:
+      status: 200
+      json:
+        asset_id: "*"
 
-  - name: backend starts
-    run: |
-      cd backend
-      uvicorn main:app --host 127.0.0.1 --port 8000 &
-      sleep 5
 
-  # ------------------------------------------------
-  # Test 3: Health endpoint works
-  # ------------------------------------------------
+  #
+  # VERIFY INITIAL STATE
+  #
+  - name: Verify asset initial state is CREATED
+    request:
+      method: GET
+      url: http://localhost:8000/assets/{{asset_id}}
+    expect:
+      status: 200
+      json:
+        asset_id: "{{asset_id}}"
+        status: CREATED
 
-  - name: health endpoint returns OK
-    run: |
-      curl -f http://127.0.0.1:8000/health
 
-  # ------------------------------------------------
-  # Test 4: Asset creation works
-  # ------------------------------------------------
+  #
+  # FILE UPLOAD TEST
+  #
+  - name: Upload asset file
+    request:
+      method: POST
+      url: http://localhost:8000/assets/{{asset_id}}/upload
+      files:
+        file: harness_test_file.txt
+    expect:
+      status: 200
 
-  - name: create asset
-    run: |
-      pip install requests
-      python <<EOF
-      import requests
-      r = requests.post("http://127.0.0.1:8000/assets")
-      assert r.status_code == 200
-      asset_id = r.json()["asset_id"]
-      print("Asset created:", asset_id)
-      EOF
 
-  # ------------------------------------------------
-  # Test 5: Upload file to asset
-  # ------------------------------------------------
+  #
+  # VERIFY UPLOADED STATE
+  #
+  - name: Verify state becomes UPLOADED after upload
+    request:
+      method: GET
+      url: http://localhost:8000/assets/{{asset_id}}
+    expect:
+      status: 200
+      json:
+        asset_id: "{{asset_id}}"
+        status: UPLOADED
 
-  - name: upload asset file
-    run: |
-      pip install requests
-      python <<EOF
-      import requests, tempfile
 
-      # create test file
-      f = tempfile.NamedTemporaryFile(delete=False)
-      f.write(b"test content")
-      f.close()
+  #
+  # WAIT FOR WORKER TO PROCESS
+  #
+  - name: Wait for worker processing
+    wait: 6
 
-      # create asset
-      r = requests.post("http://127.0.0.1:8000/assets")
-      asset_id = r.json()["asset_id"]
 
-      # upload file
-      files = {"file": open(f.name, "rb")}
-      r = requests.post(
-          f"http://127.0.0.1:8000/assets/{asset_id}/upload",
-          files=files
-      )
+  #
+  # VERIFY FINAL READY STATE
+  #
+  - name: Verify asset reaches READY state
+    request:
+      method: GET
+      url: http://localhost:8000/assets/{{asset_id}}
+    expect:
+      status: 200
+      json:
+        asset_id: "{{asset_id}}"
+        status: READY
 
-      assert r.status_code == 200
-      print("Upload successful")
-      EOF
 
-  # ------------------------------------------------
-  # Test 6: Verify MinIO storage
-  # ------------------------------------------------
-
-  - name: verify object exists in MinIO
-    run: |
-      python <<EOF
-      import boto3
-
-      s3 = boto3.client(
-          "s3",
-          endpoint_url="http://127.0.0.1:9000",
-          aws_access_key_id="minio",
-          aws_secret_access_key="minio123"
-      )
-
-      response = s3.list_objects_v2(Bucket="media")
-
-      assert "Contents" in response
-      assert len(response["Contents"]) > 0
-
-      print("MinIO storage verified")
-      EOF
-
-  # ------------------------------------------------
-  # Test 7: Verify asset retrieval
-  # ------------------------------------------------
-
-  - name: retrieve asset metadata
-    run: |
-      python <<EOF
-      import requests
-
-      r = requests.post("http://127.0.0.1:8000/assets")
-      asset_id = r.json()["asset_id"]
-
-      r = requests.get(f"http://127.0.0.1:8000/assets/{asset_id}")
-
-      assert r.status_code == 200
-      print("Asset retrieval verified")
-      EOF
+  #
+  # VERIFY ASSET RETRIEVAL CONSISTENCY
+  #
+  - name: Verify asset retrieval remains consistent
+    request:
+      method: GET
+      url: http://localhost:8000/assets/{{asset_id}}
+    expect:
+      status: 200
+      json:
+        asset_id: "{{asset_id}}"
+        status: READY
