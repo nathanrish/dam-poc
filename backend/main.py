@@ -65,4 +65,10 @@ def get_asset(asset_id: uuid.UUID, db: Session = Depends(get_db)):
     db_asset = db.query(models.Asset).filter(models.Asset.id == asset_id).first()
     if not db_asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    return db_asset
+    return {
+        "asset_id": db_asset.id,
+        "status": db_asset.status,
+        "filename": db_asset.filename,
+        "storage_path": db_asset.storage_path,
+        "created_at": db_asset.created_at
+    }
