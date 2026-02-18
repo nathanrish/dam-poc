@@ -5,7 +5,7 @@ import models
 from db import engine, SessionLocal
 import storage
 import uuid
-from task_queue import enqueue_asset_processing
+from redis_queue import enqueue_asset_processing
 
 models.Base.metadata.create_all(bind=engine)
 

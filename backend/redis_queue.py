@@ -1,14 +1,12 @@
 import os
-import json
 import redis
+import json
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 # Initialize Redis connection
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-
-QUEUE_NAME = "asset_processing_queue"
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT)
 
 def enqueue_asset_processing(asset_id: str):
     """
@@ -17,4 +15,5 @@ def enqueue_asset_processing(asset_id: str):
     job = {
         "asset_id": str(asset_id)
     }
-    redis_client.rpush(QUEUE_NAME, json.dumps(job))
+    payload = json.dumps(job)
+    redis_client.rpush("asset_processing_queue", payload)
